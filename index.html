@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>本格オンライン早押しクイズ</title>
+    <style>
+        body { font-family: sans-serif; text-align: center; background: #f0f2f5; padding: 20px; color: #333; margin: 0; }
+        .container { max-width: 600px; margin: 20px auto; background: white; padding: 30px; border-radius: 12px; box-shadow: 0 4px 10px rgba(0,0,0,0.1); }
+        h1 { font-size: 1.6rem; color: #2c3e50; }
+        
+        /* 状態表示ステータス */
+        .status { font-size: 1.3rem; font-weight: bold; margin: 20px 0; padding: 15px; border-radius: 8px; transition: all 0.3s; }
+        .status.ready { background: #fff3e0; color: #e65100; } /* 出題待ち */
+        .status.wait { background: #e3f2fd; color: #0d47a1; }  /* 回答受付中 */
+        .status.answering { background: #ffebee; color: #c62828; } /* 誰かが押した */
+        
+        /* 早押しボタン */
+        .push-btn {
+            width: 200px; height: 200px; border-radius: 50%; border: none;
+            background: #e74c3c; color: white; font-size: 1.8rem; font-weight: bold;
+            cursor: pointer; box-shadow: 0 8px #c0392b; transition: all 0.1s; margin: 20px 0;
+        }
+        .push-btn:active { transform: translateY(4px); box-shadow: 0 4px #c0392b; }
+        .push-btn:disabled { background: #bdc3c7; box-shadow: 0 8px #95a5a6; cursor: not-allowed; transform: none; }
+
+        /* 設定パネル */
+        .settings-panel { background: #fdfdfd; border: 1px solid #ddd; padding: 15px; border-radius: 8px; margin-bottom: 20px; text-align: left; }
+        .settings-panel h3 { margin-top: 0; font-size: 1rem; color: #666; }
+        .input-row { margin-bottom: 10px; display: flex; align-items: center; justify-content: space-between; }
+        input[type="text"], input[type="password"] { padding: 8px; font-size: 1rem; border: 1px solid #ccc; border-radius: 4px; width: 60%; }
+        
+        /* ホスト専用パネル */
+        .host-panel { margin-top: 30px; padding: 20px; border: 2px dashed #3498db; background: #ecf0f1; border-radius: 8px; }
+        .hidden { display: none !important; }
+        .btn { padding: 12px 24px; font-size: 1rem; cursor: pointer; margin: 5px; border: none; border-radius: 6px; color: white; font-weight: bold; transition: opacity 0.2s; }
+        .btn:hover { opacity: 0.9; }
+        .btn-start { background: #2ecc71; }
+        .btn-reset { background: #95a5a6; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h1>🔥 本格オンライン早押しクイズ</h1>
+    
+    <div class="settings-panel">
+        <h3>⚙️ プレイヤー設定</h3>
+        <div class="input-row">
+            <label for="username">あなたの名前:</label>
+            <input type="text" id="username" placeholder="名前を入力" value="プレイヤー">
+        </div>
+        <div class="input-row">
+            <label for="host-pass">ホストパスワード (任意):</label>
+            <input type="password" id="host-pass" placeholder="ホスト用パスワードを入力">
+        </div>
+    </div>
+
+    <div id="status-box" class="status ready">ホストが出題するのを待っています...</div>
+
+    <button id="buzzer" class="push-btn" disabled>PUSH!!</button>
+
+    <div id="host-controls" class="host-panel hidden">
+        <h3 style="margin-top:0; color:#2980b9;">👑 ホスト専用コントロール</h3>
+        <button class="btn btn-start" id="start-btn">📢 問題出題（ボタン有効化）</button>
+        <button class="btn btn-reset" id="reset-btn">🔄 リセット（次の問題へ）</button>
+    </div>
+</div>
+
+<script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
+    import { getFirestore, doc, onSnapshot, updateDoc, setDoc } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
+
+    // ⚠️ あなたのFirebaseプロジェクトの設定値に書き換えてください
+    const firebaseConfig = {
+  apiKey: "AIzaSyDsIkGlEC5I-_svZIFP4wxkwB3r9yivhUw",
+  authDomain: "quiz-aa174.firebaseapp.com",
+  projectId: "quiz-aa174",
+  storageBucket: "quiz-aa174.firebasestorage.app",
+  messagingSenderId: "196097038023",
+  appId: "1:196097038023:web:ab171d3a3860cc5ab550e2",
+  measurementId: "G-TM1SXYDTB2"
+}; 
+
+    const app = initializeApp(firebaseConfig);
+    const db = getFirestore(app);
+    const roomRef = doc(db, "quiz_rooms", "room_pro");
+
+    // 設定したホスト用秘密のパスワード（自由に変更してください）
+    const SECRET_HOST_PASSWORD = "quiz123"; 
+
+    // サウンドエフェクトの設定（ブラウザ標準の合成音声・電子音を使用するため外部ファイル不要！）
+    const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    
+    // 音を鳴らす関数
+    function playSound(type) {
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+        osc.connect(gain);
+        gain.connect(audioCtx.destination);
+
+        const now = audioCtx.currentTime;
+
+        if (type === 'start') {
+            // 出題音（ジャジャン♪ 高い2音）
+            osc.type = 'triangle';
+            osc.frequency.setValueAtTime(523.25, now); // ド
+            osc.frequency.setValueAtTime(659.25, now + 0.1); // ミ
+            gain.gain.setValueAtTime(0.3, now);
+            gain.gain.exponentialRampToValueAtTime(0.01, now + 0.4);
+            osc.start(now);
+            osc.stop(now + 0.4);
+        } else if (type === 'buzzer') {
+            // 早押し音（ピンポン！または高音）
+            osc.type = 'sine';
+            osc.frequency.setValueAtTime(880, now); // ラ
+            gain.gain.setValueAtTime(0.4, now);
+            gain.gain.exponentialRampToValueAtTime(0.01, now + 0.3);
+            osc.start(now);
+            osc.stop(now + 0.3);
+        }
+    }
+
+    // 各画面要素の取得
+    const statusBox = document.getElementById("status-box");
+    const buzzerBtn = document.getElementById("buzzer");
+    const usernameInput = document.getElementById("username");
+    const hostPassInput = document.getElementById("host-pass");
+    const hostControls = document.getElementById("host-controls");
+    const startBtn = document.getElementById("start-btn");
+    const resetBtn = document.getElementById("reset-btn");
+
+    let previousGameState = "";
+
+    // 1. パスワード入力の監視（一致したらホストパネルを出す）
+    hostPassInput.addEventListener("input", () => {
+        if (hostPassInput.value === SECRET_HOST_PASSWORD) {
+            hostControls.classList.remove("hidden");
+        } else {
+            hostControls.classList.add("hidden");
+        }
+    });
+
+    // 2. サーバー上の状態をリアルタイム監視
+    onSnapshot(roomRef, (docSnap) => {
+        if (!docSnap.exists()) {
+            setDoc(roomRef, { state: "ready", answeredBy: "" });
+            return;
+        }
+
+        const data = docSnap.data();
+        
+        // 状態の変化を検知して音を鳴らす
+        if (data.state !== previousGameState) {
+            if (data.state === "wait") playSound('start');
+            if (data.state === "answering") playSound('buzzer');
+            previousGameState = data.state;
+        }
+
+        // 状態ごとの画面表示切り替え
+        if (data.state === "ready") {
+            statusBox.textContent = "💤 ホストが出題するのを待っています...";
+            statusBox.className = "status ready";
+            buzzerBtn.disabled = true;
+        } else if (data.state === "wait") {
+            statusBox.textContent = "📢 回答受付中！ ボタンを押せます！";
+            statusBox.className = "status wait";
+            buzzerBtn.disabled = false;
+        } else if (data.state === "answering") {
+            statusBox.textContent = `🚨 ${data.answeredBy} さんが解答権獲得！`;
+            statusBox.className = "status answering";
+            buzzerBtn.disabled = true;
+        }
+    });
+
+    // 3. プレイヤー：早押しボタンを押したとき
+    buzzerBtn.addEventListener("click", async () => {
+        // 音声機能のアクティベート（ブラウザのセキュリティ対策）
+        if (audioCtx.state === 'suspended') audioCtx.resume();
+        
+        const name = usernameInput.value.trim() || "名無しさん";
+        try {
+            await updateDoc(roomRef, {
+                state: "answering",
+                answeredBy: name
+            });
+        } catch (e) { console.error(e); }
+    });
+
+    // 4. ホスト：出題スタートボタン
+    startBtn.addEventListener("click", async () => {
+        if (audioCtx.state === 'suspended') audioCtx.resume();
+        await updateDoc(roomRef, { state: "wait", answeredBy: "" });
+    });
+
+    // 5. ホスト：リセットボタン
+    resetBtn.addEventListener("click", async () => {
+        await updateDoc(roomRef, { state: "ready", answeredBy: "" });
+    });
+</script>
+</body>
+</html>
