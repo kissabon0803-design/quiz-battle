@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>オンライン早押しクイズ</title>
+    <style>
+        body { font-family: sans-serif; text-align: center; background: #f0f2f5; padding: 20px; color: #333; }
+        .container { max-width: 600px; margin: 0 auto; background: white; padding: 30px; border-radius: 12px; box-shadow: 0 4px 10px rgba(0,0,0,0.1); }
+        h1 { font-size: 1.5rem; }
+        .status { font-size: 1.2rem; font-weight: bold; margin: 20px 0; padding: 15px; border-radius: 8px; }
+        .status.wait { background: #e3f2fd; color: #0d47a1; }
+        .status.answering { background: #ffebee; color: #c62828; }
+        
+        /* 早押しボタン */
+        .push-btn {
+            width: 200px; height: 200px; border-radius: 50%; border: none;
+            background: #e74c3c; color: white; font-size: 1.8rem; font-weight: bold;
+            cursor: pointer; box-shadow: 0 8px #c0392b; transition: all 0.1s; margin: 20px 0;
+        }
+        .push-btn:active { transform: translateY(4px); box-shadow: 0 4px #c0392b; }
+        .push-btn:disabled { background: #bdc3c7; box-shadow: 0 8px #95a5a6; cursor: not-allowed; }
+
+        /* 管理者用コントロール */
+        .admin-panel { margin-top: 30px; padding: 15px; border-top: 2px dashed #ccc; background: #fafafa; }
+        .btn { padding: 10px 20px; font-size: 1rem; cursor: pointer; margin: 5px; border: none; border-radius: 4px; color: white; }
+        .btn-reset { background: #34495e; }
+        .input-group { margin: 15px 0; }
+        input { padding: 8px; font-size: 1rem; width: 80%; max-width: 300px; text-align: center; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h1>🔥 オンライン早押しクイズルーム</h1>
+    
+    <div class="input-group" id="name-area">
+        <input type="text" id="username" placeholder="あなたの名前を入力" value="プレイヤー">
+    </div>
+
+    <div id="status-box" class="status wait">誰でもボタンを押せます！</div>
+
+    <button id="buzzer" class="push-btn">PUSH!!</button>
+
+    <div class="admin-panel">
+        <h3>🛠️ ルーム管理</h3>
+        <button class="btn btn-reset" id="reset-btn">状態をリセット（次の問題へ）</button>
+    </div>
+</div>
+
+<script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
+    import { getFirestore, doc, onSnapshot, updateDoc } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
+
+    // ⚠️ 下記の「YOUR_...」を、あなたのFirebaseプロジェクトの設定値に書き換えてください
+
+   const firebaseConfig = {
+  apiKey: "AIzaSyDsIkGlEC5I-_svZIFP4wxkwB3r9yivhUw",
+  authDomain: "quiz-aa174.firebaseapp.com",
+  projectId: "quiz-aa174",
+  storageBucket: "quiz-aa174.firebasestorage.app",
+  messagingSenderId: "196097038023",
+  appId: "1:196097038023:web:ab171d3a3860cc5ab550e2",
+  measurementId: "G-TM1SXYDTB2"
+}; 
+   // Firebaseの初期化
+    const app = initializeApp(firebaseConfig);
+    const db = getFirestore(app);
+
+    // ルームデータの参照（クイズの部屋「room1」を作成）
+    const roomRef = doc(db, "quiz_rooms", "room1");
+
+    const statusBox = document.getElementById("status-box");
+    const buzzerBtn = document.getElementById("buzzer");
+    const usernameInput = document.getElementById("username");
+    const resetBtn = document.getElementById("reset-btn");
+
+    // 1. サーバー上の状態をリアルタイム監視（誰かが押したら全員の画面が変わる）
+    onSnapshot(roomRef, (docSnap) => {
+        if (docSnap.exists()) {
+            const data = docSnap.data();
+            
+            if (data.isLocked) {
+                // 誰かがすでに押した状態
+                statusBox.textContent = `🚨 ${data.answeredBy} さんが解答権を獲得！`;
+                statusBox.className = "status answering";
+                buzzerBtn.disabled = true;
+            } else {
+                // 誰も押していない受付状態
+                statusBox.textContent = "自由に対戦相手と早押ししてください！";
+                statusBox.className = "status wait";
+                buzzerBtn.disabled = false;
+            }
+        } else {
+            // 初回起動時などデータがない場合は初期化
+            updateDoc(roomRef, { isLocked: false, answeredBy: "" }).catch(async () => {
+                // ドキュメントが存在しない場合は新規作成（簡易的なセットアップ用）
+                const { setDoc } = await import("https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js");
+                await setDoc(roomRef, { isLocked: false, answeredBy: "" });
+            });
+        }
+    });
+
+    // 2. ボタンを押した時の処理（早い者勝ちのロックをかける）
+    buzzerBtn.addEventListener("click", async () => {
+        const name = usernameInput.value.trim() || "名無しさん";
+        try {
+            // サーバー上のデータを書き換える（Firestoreがミリ秒単位で先着を判定してくれます）
+            await updateDoc(roomRef, {
+                isLocked: true,
+                answeredBy: name
+            });
+        } catch (error) {
+            console.error("エラー:", error);
+        }
+    });
+
+    // 3. リセット処理
+    resetBtn.addEventListener("click", async () => {
+        await updateDoc(roomRef, {
+            isLocked: false,
+            answeredBy: ""
+        });
+    });
+</script>
+</body>
+</html>
